@@ -1,0 +1,35 @@
+{
+  "name": "cafe-app-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cafe application API server",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "node --test test/*.test.js",
+    "test:e2e": "node test-e2e-all.js",
+    "test:socket": "node --test --test-name-pattern=Socket.io test/module1.test.js",
+    "admin:create": "node scripts/create-admin.js",
+    "qr:generate": "node scripts/generate-table-qrs.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.9.5",
+    "qrcode": "^1.5.4",
+    "shortid": "^2.2.16",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9",
+    "supertest": "^7.0.0",
+    "socket.io-client": "^4.8.1"
+  }
+}
