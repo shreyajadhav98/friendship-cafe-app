@@ -9,7 +9,7 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const { createApp } = require('../src/app');
 const { connectDatabase } = require('../src/db/connect');
-const { User, Menu, Order, Confession, Bill } = require('../src/models');
+const { User, Menu, Order, Confession, Bill, EventBooking } = require('../src/models');
 const { authenticate } = require('../src/middleware/authenticate');
 const { createHttpServer } = require('../src/server');
 const { generateQrCodes } = require('../scripts/generate-table-qrs');
@@ -23,7 +23,7 @@ let module3CompletedOrderId;
 
 before(async () => {
   await connectDatabase(uri);
-  await Promise.all([User, Menu, Order, Confession, Bill].map((model) => model.deleteMany({})));
+  await Promise.all([User, Menu, Order, Confession, Bill, EventBooking].map((model) => model.deleteMany({})));
   admin = await User.create({ username: 'module1-admin', passwordHash: await bcrypt.hash('integration-password-123', 10), role: 'admin' });
   menu = await Menu.create({ name: 'Test latte', category: 'Coffee', description: 'Integration fixture', price: 4.5, imageUrl: '', isAvailable: true, prepTimeMinutes: 5 });
 });
@@ -289,5 +289,58 @@ test('master QR inventory requires admin auth and serves generated PNG assets', 
     if (previousOutputDirectory === undefined) delete process.env.QR_OUTPUT_DIR;
     else process.env.QR_OUTPUT_DIR = previousOutputDirectory;
     await fs.rm(outputDirectory, { recursive: true, force: true });
+  }
+});
+
+test('event bookings validate availability, protect admin routes, and broadcast lifecycle updates', async () => {
+  const { httpServer, io, app: liveApp } = createHttpServer();
+  await new Promise((resolve, reject) => { httpServer.once('error', reject); httpServer.listen(0, '127.0.0.1', resolve); });
+  const baseUrl = `http://127.0.0.1:${httpServer.address().port}`;
+  const login = await request(liveApp).post('/api/auth/login').send({ username: 'module1-admin', password: 'integration-password-123' }).expect(200);
+  const headers = { Authorization: `Bearer ${login.body.token}` };
+  const adminSocket = connectSocket(baseUrl, { auth: { token: login.body.token }, transports: ['websocket'] });
+  const createdIds = [];
+  try {
+    await waitForConnect(adminSocket);
+    await request(liveApp).get('/api/events').expect(401);
+    await request(liveApp).patch('/api/events/not-an-id/status').send({ status: 'Approved' }).expect(401);
+    const eventDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const bookingPayload = (overrides = {}) => ({ customerName: 'Event Guest', phone: '+919876543210', email: 'guest@example.com', eventType: 'Birthday Party', eventDate, startTime: '10:00', endTime: '12:00', guestCount: 35, bookingSpace: 'Full Cafe', cateringPreference: 'Custom Buffet', specialRequests: 'Small cake table', estimatedBudget: 25000, ...overrides });
+
+    const newBookingEvent = waitForSocketEvent(adminSocket, 'new_event_booking');
+    const birthday = await request(liveApp).post('/api/events').send(bookingPayload()).expect(201);
+    createdIds.push(birthday.body.booking.bookingId);
+    assert.match(birthday.body.booking.bookingId, /^EVT-[A-F0-9]{4}$/);
+    assert.equal((await newBookingEvent).bookingId, birthday.body.booking.bookingId);
+    await request(liveApp).patch(`/api/events/${birthday.body.booking.id}/status`).send({ status: 'Approved' }).expect(401);
+    const approvedEvent = waitForSocketEvent(adminSocket, 'event_status_updated', (booking) => booking.bookingId === birthday.body.booking.bookingId && booking.status === 'Approved');
+    await request(liveApp).patch(`/api/events/${birthday.body.booking.id}/status`).set(headers).send({ status: 'Approved', adminNotes: 'Private setup confirmed' }).expect(200);
+    await approvedEvent;
+
+    await request(liveApp).post('/api/events').send(bookingPayload({ eventType: 'Corporate Meeting', bookingSpace: 'Private Section', startTime: '11:00', endTime: '13:00' })).expect(409);
+    const corporate = await request(liveApp).post('/api/events').send(bookingPayload({ eventType: 'Corporate Meeting', bookingSpace: 'Private Section', startTime: '13:00', endTime: '14:00' })).expect(201);
+    createdIds.push(corporate.body.booking.bookingId);
+    const openMic = await request(liveApp).post('/api/events').send(bookingPayload({ eventType: 'Open Mic Night', bookingSpace: 'Outdoor Patio', startTime: '14:00', endTime: '16:00' })).expect(201);
+    createdIds.push(openMic.body.booking.bookingId);
+    const availability = await request(liveApp).get(`/api/events/availability?date=${eventDate}`).expect(200);
+    assert.equal(availability.body.slots.length, 3);
+    assert.equal(availability.body.slots.some((slot) => slot.bookingSpace === 'Full Cafe' && slot.status === 'Approved'), true);
+    const lookup = await request(liveApp).get(`/api/events/lookup?bookingId=${corporate.body.booking.bookingId}`).expect(200);
+    assert.equal(lookup.body.bookings[0].status, 'Pending');
+    assert.equal('phone' in lookup.body.bookings[0], false);
+
+    const approvedCorporateEvent = waitForSocketEvent(adminSocket, 'event_status_updated', (booking) => booking.bookingId === corporate.body.booking.bookingId && booking.status === 'Approved');
+    await request(liveApp).patch(`/api/events/${corporate.body.booking.id}/status`).set(headers).send({ status: 'Approved' }).expect(200);
+    await approvedCorporateEvent;
+    const completedCorporateEvent = waitForSocketEvent(adminSocket, 'event_status_updated', (booking) => booking.bookingId === corporate.body.booking.bookingId && booking.status === 'Completed');
+    const completed = await request(liveApp).patch(`/api/events/${corporate.body.booking.id}/status`).set(headers).send({ status: 'Completed', adminNotes: 'Event completed successfully' }).expect(200);
+    await completedCorporateEvent;
+    assert.equal(completed.body.booking.status, 'Completed');
+    await request(liveApp).get('/api/events?status=Pending').set(headers).expect(200);
+    await request(liveApp).delete(`/api/events/${openMic.body.booking.id}`).expect(401);
+  } finally {
+    if (createdIds.length) await EventBooking.deleteMany({ bookingId: { $in: createdIds } });
+    adminSocket.disconnect();
+    await new Promise((resolve) => io.close(resolve));
   }
 });

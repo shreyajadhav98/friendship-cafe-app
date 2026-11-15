@@ -8,6 +8,7 @@ const menuRoutes = require('./routes/menu');
 const orderRoutes = require('./routes/orders');
 const billingRoutes = require('./routes/billing');
 const confessionRoutes = require('./routes/confessions');
+const eventRoutes = require('./routes/events');
 const { router: qrCodesRoutes, getQrOutputDirectory, describeQrFile } = require('./routes/qrCodes');
 
 function createApp() {
@@ -22,6 +23,7 @@ function createApp() {
   app.use('/api/orders', orderRoutes);
   app.use('/api/billing', billingRoutes);
   app.use('/api/confessions', confessionRoutes);
+  app.use('/api/events', eventRoutes);
   app.use('/api/admin/qr-codes', qrCodesRoutes);
   app.get('/generated-qr/:filename', (req, res, next) => {
     const filename = req.params.filename;

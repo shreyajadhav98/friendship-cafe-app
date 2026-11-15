@@ -3,9 +3,9 @@ import { Link } from 'react-router-dom';
 import LanguageSwitcher from '../components/LanguageSwitcher';
 import { useLanguage } from '../context/LanguageContext';
 import { io } from 'socket.io-client';
-import { apiRequest } from '../api';
+import { API_ROOT, apiRequest } from '../api';
 
-const SOCKET_URL = import.meta.env.VITE_API_URL || undefined;
+const SOCKET_URL = API_ROOT || undefined;
 const MAX_LENGTH = 500;
 
 function getLikedIds() {

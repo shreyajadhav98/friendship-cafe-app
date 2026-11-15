@@ -12,7 +12,7 @@ process.env.JWT_SECRET ||= 'local-e2e-only-secret-change-before-production';
 
 const { connectDatabase } = require('./src/db/connect');
 const { createHttpServer } = require('./src/server');
-const { User, Menu, Order, Bill, Confession } = require('./src/models');
+const { User, Menu, Order, Bill, Confession, EventBooking } = require('./src/models');
 
 const TEST_URI = process.env.TEST_MONGODB_URI;
 const ADMIN_USERNAME = 'e2e-admin';
@@ -71,7 +71,7 @@ async function startHttpServer(httpServer) {
 }
 
 async function seedDatabase() {
-  await Promise.all([User, Menu, Order, Bill, Confession].map((model) => model.deleteMany({})));
+  await Promise.all([User, Menu, Order, Bill, Confession, EventBooking].map((model) => model.deleteMany({})));
   await User.create({
     username: ADMIN_USERNAME,
     passwordHash: await bcrypt.hash(ADMIN_PASSWORD, 10),
@@ -211,9 +211,28 @@ async function run() {
     assert.equal(publicAfterApproval.body.confessions.some((entry) => entry._id === confessionId), true);
     console.log('Community: confession stayed pending until approval, then appeared on the live wall.');
 
+    const eventDate = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const eventCreated = waitForSocketEvent(adminSocket, 'new_event_booking', (booking) => booking.eventType === 'Birthday Party');
+    const eventResponse = await request(baseUrl).post('/api/events').send({ customerName: 'E2E Celebration Guest', phone: '+919876543210', eventType: 'Birthday Party', eventDate, startTime: '11:00', endTime: '13:00', guestCount: 24, bookingSpace: 'Full Cafe', cateringPreference: 'Standard Menu', estimatedBudget: 18000 }).expect(201);
+    const eventBooking = eventResponse.body.booking;
+    assert.match(eventBooking.bookingId, /^EVT-[A-F0-9]{4}$/);
+    assert.equal((await eventCreated).bookingId, eventBooking.bookingId);
+    await request(baseUrl).get('/api/events').expect(401);
+    const approvedEvent = waitForSocketEvent(adminSocket, 'event_status_updated', (booking) => booking.bookingId === eventBooking.bookingId && booking.status === 'Approved');
+    await request(baseUrl).patch(`/api/events/${eventBooking.id}/status`).set(adminHeaders).send({ status: 'Approved', adminNotes: 'E2E approval' }).expect(200);
+    await approvedEvent;
+    await request(baseUrl).post('/api/events').send({ customerName: 'Conflict Guest', phone: '+919876543211', eventType: 'Corporate Meeting', eventDate, startTime: '12:00', endTime: '14:00', guestCount: 12, bookingSpace: 'Private Section', cateringPreference: 'No Catering' }).expect(409);
+    const completedEvent = waitForSocketEvent(adminSocket, 'event_status_updated', (booking) => booking.bookingId === eventBooking.bookingId && booking.status === 'Completed');
+    await request(baseUrl).patch(`/api/events/${eventBooking.id}/status`).set(adminHeaders).send({ status: 'Completed' }).expect(200);
+    await completedEvent;
+    const eventLookup = await request(baseUrl).get(`/api/events/lookup?bookingId=${eventBooking.bookingId}`).expect(200);
+    assert.equal(eventLookup.body.bookings[0].status, 'Completed');
+    console.log('Events: booking request was approved, checked for conflicts, completed, and broadcast live.');
+
     await request(baseUrl).get('/api/orders').expect(401);
     await request(baseUrl).get('/api/billing/summary').expect(401);
     await request(baseUrl).get('/api/confessions/pending').expect(401);
+    await request(baseUrl).get('/api/events').expect(401);
     await request(baseUrl).patch(`/api/confessions/${confessionId}/approve`).expect(401);
     await request(baseUrl).post('/api/menu').send({ name: 'Unauthorized item' }).expect(401);
     console.log('Boundaries: invalid order payloads were rejected and protected endpoints returned 401.');

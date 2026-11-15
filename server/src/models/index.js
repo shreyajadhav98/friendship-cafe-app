@@ -3,5 +3,6 @@ module.exports = {
   Menu: require('./Menu'),
   Order: require('./Order'),
   Confession: require('./Confession'),
-  Bill: require('./Bill')
+  Bill: require('./Bill'),
+  EventBooking: require('./EventBooking')
 };

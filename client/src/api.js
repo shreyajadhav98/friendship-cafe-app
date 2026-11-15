@@ -1,4 +1,4 @@
-const API_ROOT = import.meta.env.VITE_API_URL || '';
+export const API_ROOT = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 
 export async function apiRequest(path, { token, ...options } = {}) {
   const response = await fetch(`${API_ROOT}${path}`, {
