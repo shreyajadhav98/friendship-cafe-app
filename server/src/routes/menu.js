@@ -2,13 +2,34 @@ const express = require('express');
 const mongoose = require('mongoose');
 const { Menu } = require('../models');
 const { authenticate } = require('../middleware/authenticate');
+const { sanitizeText, hasOnlyKeys } = require('../utils/input');
+const { createRateLimiter } = require('../middleware/rateLimit');
 
 const router = express.Router();
-const writableFields = ['name', 'category', 'description', 'price', 'imageUrl', 'isAvailable', 'prepTimeMinutes'];
+const writeLimiter = createRateLimiter({ windowMs: 60_000, max: 30, message: 'Too many menu changes. Please wait before trying again.' });
+const writableFields = ['name', 'name_hi', 'name_mr', 'category', 'category_hi', 'category_mr', 'description', 'description_hi', 'description_mr', 'price', 'imageUrl', 'isAvailable', 'prepTimeMinutes'];
+const stringLimits = { name: 120, name_hi: 120, name_mr: 120, category: 80, category_hi: 80, category_mr: 80, description: 2000, description_hi: 2000, description_mr: 2000, imageUrl: 2048 };
 
-function pickFields(body) {
+function pickFields(body, requireCore = false) {
+  if (!hasOnlyKeys(body, [...writableFields, 'price', 'prepTimeMinutes', 'isAvailable'])) throw new TypeError('Menu payload must be an object containing supported fields only');
   const data = {};
-  for (const field of writableFields) if (Object.hasOwn(body, field)) data[field] = body[field];
+  for (const field of writableFields) {
+    if (!Object.hasOwn(body, field)) continue;
+    if (!Object.hasOwn(stringLimits, field)) continue;
+    data[field] = sanitizeText(body[field], { maxLength: stringLimits[field], field });
+  }
+  for (const field of ['price', 'prepTimeMinutes']) {
+    if (!Object.hasOwn(body, field)) continue;
+    if (typeof body[field] !== 'number' || !Number.isFinite(body[field]) || body[field] < 0 || field === 'prepTimeMinutes' && (!Number.isInteger(body[field]) || body[field] > 360)) throw new RangeError(`${field} must be a valid non-negative ${field === 'price' ? 'amount' : 'integer up to 360'}`);
+    data[field] = body[field];
+  }
+  if (Object.hasOwn(body, 'isAvailable')) {
+    if (typeof body.isAvailable !== 'boolean') throw new TypeError('isAvailable must be a boolean');
+    data.isAvailable = body.isAvailable;
+  }
+  if (requireCore) for (const field of ['name', 'category', 'price']) if (data[field] === undefined) throw new TypeError(`${field} is required`);
+  if (data.category && !/^[\p{L}\p{N}][\p{L}\p{N}\s&'()./-]*$/u.test(data.category)) throw new TypeError('Category contains unsupported characters');
+  if (data.imageUrl && !/^https:\/\//i.test(data.imageUrl) && !/^\/(?!\/)(?!.*(?:\.\.|\\))[\w./-]*$/u.test(data.imageUrl)) throw new TypeError('imageUrl must be an HTTPS URL or a safe site path');
   return data;
 }
 
@@ -31,15 +52,15 @@ router.get('/', async (req, res, next) => {
   } catch (error) { return next(error); }
 });
 
-router.post('/', authenticate, async (req, res, next) => {
+router.post('/', authenticate, writeLimiter, async (req, res, next) => {
   try {
-    const data = pickFields(req.body || {});
+    const data = pickFields(req.body || {}, true);
     const item = await Menu.create(data);
     return res.status(201).json({ item });
   } catch (error) { return next(error); }
 });
 
-router.put('/:id', authenticate, async (req, res, next) => {
+router.put('/:id', authenticate, writeLimiter, async (req, res, next) => {
   try {
     if (!validId(req.params.id)) return res.status(400).json({ error: 'Invalid menu item id' });
     const data = pickFields(req.body || {});
@@ -50,9 +71,10 @@ router.put('/:id', authenticate, async (req, res, next) => {
   } catch (error) { return next(error); }
 });
 
-router.patch('/:id/is-available', authenticate, async (req, res, next) => {
+router.patch('/:id/is-available', authenticate, writeLimiter, async (req, res, next) => {
   try {
     if (!validId(req.params.id)) return res.status(400).json({ error: 'Invalid menu item id' });
+    if (!hasOnlyKeys(req.body, ['isAvailable'])) return res.status(400).json({ error: 'Availability payload must contain isAvailable only' });
     if (typeof req.body?.isAvailable !== 'boolean') return res.status(400).json({ error: 'isAvailable must be a boolean' });
     const item = await Menu.findByIdAndUpdate(req.params.id, { $set: { isAvailable: req.body.isAvailable } }, { new: true, runValidators: true });
     if (!item) return res.status(404).json({ error: 'Menu item not found' });
@@ -60,7 +82,7 @@ router.patch('/:id/is-available', authenticate, async (req, res, next) => {
   } catch (error) { return next(error); }
 });
 
-router.delete('/:id', authenticate, async (req, res, next) => {
+router.delete('/:id', authenticate, writeLimiter, async (req, res, next) => {
   try {
     if (!validId(req.params.id)) return res.status(400).json({ error: 'Invalid menu item id' });
     const item = await Menu.findByIdAndDelete(req.params.id);

@@ -105,3 +105,15 @@ Object.assign(hindi, { ' / Event bookings': ' / कार्यक्रम ब�
 Object.assign(marathi, { ' / Event bookings': ' / कार्यक्रम बुकिंग', 'CELEBRATIONS AT FRIENDSHIP CAFÉ': 'फ्रेंडशिप कॅफेमधील सोहळे', 'Enter a valid email address': 'योग्य ईमेल पत्ता द्या.' });
 Object.assign(hindi, { 'Event Bookings': 'कार्यक्रम बुकिंग' });
 Object.assign(marathi, { 'Event Bookings': 'कार्यक्रम बुकिंग' });
+Object.assign(hindi, {
+  'Item name (English)': 'आइटम का नाम (अंग्रेज़ी)', 'Hindi name': 'हिंदी नाम', 'Marathi name': 'मराठी नाम',
+  'Category (English)': 'श्रेणी (अंग्रेज़ी)', 'Hindi category': 'हिंदी श्रेणी', 'Marathi category': 'मराठी श्रेणी',
+  'Description (English)': 'विवरण (अंग्रेज़ी)', 'Hindi description': 'हिंदी विवरण', 'Marathi description': 'मराठी विवरण',
+  '10-digit Indian mobile number': '10 अंकों का भारतीय मोबाइल नंबर', 'Customer phone': 'ग्राहक का फ़ोन'
+});
+Object.assign(marathi, {
+  'Item name (English)': 'पदार्थाचे नाव (इंग्रजी)', 'Hindi name': 'हिंदी नाव', 'Marathi name': 'मराठी नाव',
+  'Category (English)': 'वर्ग (इंग्रजी)', 'Hindi category': 'हिंदी वर्ग', 'Marathi category': 'मराठी वर्ग',
+  'Description (English)': 'वर्णन (इंग्रजी)', 'Hindi description': 'हिंदी वर्णन', 'Marathi description': 'मराठी वर्णन',
+  '10-digit Indian mobile number': '10 अंकी भारतीय मोबाइल नंबर', 'Customer phone': 'ग्राहकाचा फोन'
+});

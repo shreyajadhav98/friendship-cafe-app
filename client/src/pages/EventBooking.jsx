@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import LanguageSwitcher from '../components/LanguageSwitcher';
 import { useLanguage } from '../context/LanguageContext';
 import { apiRequest } from '../api';
+import { getCustomerSessionToken } from '../customerSession';
 
 const eventTypes = [
   'Birthday Party', 'Anniversary Celebration', 'Bridal Shower', 'Baby Shower', 'Engagement Party',
@@ -72,7 +73,8 @@ export default function EventBooking() {
     if (conflicts.length) { setError('Selected time overlaps an approved booking. Choose another space or time.'); return; }
     setSubmitting(true);
     try {
-      const data = await apiRequest('/api/events', { method: 'POST', body: JSON.stringify({ ...form, guestCount: Number(form.guestCount), estimatedBudget: form.estimatedBudget === '' ? null : Number(form.estimatedBudget) }) });
+      const customerSessionToken = await getCustomerSessionToken();
+      const data = await apiRequest('/api/events', { customerSessionToken, method: 'POST', body: JSON.stringify({ ...form, guestCount: Number(form.guestCount), estimatedBudget: form.estimatedBudget === '' ? null : Number(form.estimatedBudget) }) });
       setConfirmation(data.booking); setLookupValue(data.booking.bookingId); setLookupMode('bookingId');
     } catch (err) { setError(err.message); }
     finally { setSubmitting(false); }
@@ -93,12 +95,12 @@ export default function EventBooking() {
       <div className="event-content-grid">
         <section className="event-form-panel"><div className="event-section-heading"><div><p className="eyebrow">{t('CELEBRATE TOGETHER')}</p><h2>{t('Event booking request')}</h2></div><span className="event-price-note">{t('Budget in ₹')}</span></div>
           <form className="event-booking-form" onSubmit={submitBooking}>
-            <div className="event-form-row"><label>{t('Your name')}<input autoComplete="name" value={form.customerName} onChange={(e) => change('customerName', e.target.value)} maxLength="120" required /></label><label>{t('Phone number')}<input type="tel" autoComplete="tel" value={form.phone} onChange={(e) => change('phone', e.target.value)} maxLength="25" placeholder={t('Phone number')} required /></label></div>
+            <div className="event-form-row"><label>{t('Your name')}<input autoComplete="name" value={form.customerName} onChange={(e) => change('customerName', e.target.value)} maxLength="120" pattern="[^<>]*" required /></label><label>{t('Phone number')}<input type="tel" inputMode="numeric" autoComplete="tel-national" value={form.phone} onChange={(e) => change('phone', e.target.value.replace(/\D/g, '').slice(0, 10))} maxLength="10" pattern="[6-9][0-9]{9}" placeholder={t('10-digit Indian mobile number')} required /></label></div>
             <label>{t('Email (optional)')}<input type="email" autoComplete="email" value={form.email} onChange={(e) => change('email', e.target.value)} maxLength="254" /></label>
             <label>{t('Type of event')}<select value={form.eventType} onChange={(e) => change('eventType', e.target.value)}>{eventTypes.map((type) => <option key={type} value={type}>{t(type)}</option>)}</select></label>
             <div className="event-form-row event-form-row-three"><label>{t('Event date')}<input type="date" min={cafeToday()} value={form.eventDate} onChange={(e) => change('eventDate', e.target.value)} required /></label><label>{t('Start time')}<select value={form.startTime} onChange={(e) => { const startTime = e.target.value; change('startTime', startTime); if (form.endTime <= startTime) change('endTime', timeSlots.find((time) => time > startTime) || '22:00'); }}>{timeSlots.slice(0, -1).map((time) => <option key={time}>{time}</option>)}</select></label><label>{t('End time')}<select value={endTimes.includes(form.endTime) ? form.endTime : endTimes[0]} onChange={(e) => change('endTime', e.target.value)}>{endTimes.map((time) => <option key={time}>{time}</option>)}</select></label></div>
             {form.eventDate && <div className={`event-availability ${conflicts.length ? 'availability-conflict' : 'availability-open'}`} role="status"><strong>{availabilityLoading ? t('Checking availability…') : availabilityError ? t('Availability could not be checked.') : conflicts.length ? t('This time is already booked for the selected space.') : t('This time appears available.')}</strong>{availabilityError && <span>{availabilityError}</span>}{pendingWarnings.length > 0 && <span>{t('There is a pending request during this time; we will confirm after review.')}</span>}{slots.length > 0 && <div className="availability-slots">{slots.map((slot) => <span key={slot.bookingId} className={slot.status === 'Approved' ? 'slot-approved' : 'slot-pending'}>{slot.startTime}–{slot.endTime} · {t(slot.bookingSpace)} · {t(slot.status)}</span>)}</div>}</div>}
-            <div className="event-form-row"><label>{t('Guest count')}<input type="number" min="1" max="1000" step="1" value={form.guestCount} onChange={(e) => change('guestCount', e.target.value)} required /></label><label>{t('Space preference')}<select value={form.bookingSpace} onChange={(e) => change('bookingSpace', e.target.value)}>{spaces.map((space) => <option key={space}>{t(space)}</option>)}</select></label></div>
+            <div className="event-form-row"><label>{t('Guest count')}<input type="number" min="1" max="500" step="1" value={form.guestCount} onChange={(e) => change('guestCount', e.target.value)} required /></label><label>{t('Space preference')}<select value={form.bookingSpace} onChange={(e) => change('bookingSpace', e.target.value)}>{spaces.map((space) => <option key={space}>{t(space)}</option>)}</select></label></div>
             <label>{t('Catering preference')}<select value={form.cateringPreference} onChange={(e) => change('cateringPreference', e.target.value)}>{cateringOptions.map((option) => <option key={option}>{t(option)}</option>)}</select></label>
             <label>{t('Special requests')}<textarea rows="4" maxLength="3000" value={form.specialRequests} onChange={(e) => change('specialRequests', e.target.value)} placeholder={t('Decorations, sound system, cake, projector, seating layout…')} /></label>
             <label>{t('Estimated budget (₹, optional)')}<input type="number" min="0" step="100" value={form.estimatedBudget} onChange={(e) => change('estimatedBudget', e.target.value)} placeholder="₹" /></label>

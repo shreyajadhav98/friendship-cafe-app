@@ -1,6 +1,8 @@
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const { getConfig } = require('../config/env');
+const { createSocketRateLimiter } = require('../middleware/rateLimit');
+const { validateIndianMobile, isPlainObject, sanitizeText, hasOnlyKeys } = require('../utils/input');
 const { User, Menu, Order } = require('../models');
 
 const ADMIN_ROOM = 'admins:kitchen';
@@ -22,6 +24,8 @@ function publicOrder(order) {
     items: order.items.map((item) => ({
       menuItemId: String(item.menuItemId?._id || item.menuItemId),
       name: item.itemName || item.menuItemId?.name || 'Menu item',
+      name_hi: item.itemName_hi || item.menuItemId?.name_hi || '',
+      name_mr: item.itemName_mr || item.menuItemId?.name_mr || '',
       quantity: item.quantity,
       unitPrice: item.unitPrice || item.menuItemId?.price || 0,
       customNotes: item.customNotes || ''
@@ -39,6 +43,8 @@ function acknowledge(callback, result) {
 }
 
 function initializeOrderSockets(io) {
+  const limitOrderAttempts = createSocketRateLimiter({ windowMs: 60_000, max: 6 });
+  const limitSocketActions = createSocketRateLimiter({ windowMs: 60_000, max: 60 });
   io.use(async (socket, next) => {
     const token = socket.handshake.auth?.token;
     if (!token) return next();
@@ -58,6 +64,7 @@ function initializeOrderSockets(io) {
 
     socket.on('trackOrder', async (payload = {}, callback) => {
       try {
+        if (!limitSocketActions(socket, 'trackOrder', callback, acknowledge)) return;
         if (typeof payload.orderId !== 'string' || typeof payload.trackingToken !== 'string') {
           return acknowledge(callback, { ok: false, error: 'Order tracking credentials are required' });
         }
@@ -70,21 +77,39 @@ function initializeOrderSockets(io) {
 
     socket.on('placeOrder', async (payload = {}, callback) => {
       try {
-        const tableNumber = typeof payload.tableNumber === 'string' ? payload.tableNumber.trim() : '';
-        const customerName = typeof payload.customerName === 'string' && payload.customerName.trim() ? payload.customerName.trim() : 'Guest';
-        if (!tableNumber || tableNumber.length > 30) return acknowledge(callback, { ok: false, error: 'A valid table number is required' });
-        if (customerName.length > 120) return acknowledge(callback, { ok: false, error: 'Customer name is too long' });
+        if (!limitOrderAttempts(socket, 'placeOrder', callback, acknowledge)) return;
+        if (!isPlainObject(payload)) return acknowledge(callback, { ok: false, error: 'Order payload must be a JSON object' });
+        const sessionToken = payload.sessionToken;
+        if (typeof sessionToken !== 'string') return acknowledge(callback, { ok: false, error: 'Customer session verification is required. Refresh the page and try again.' });
+        try {
+          const session = jwt.verify(sessionToken, getConfig().jwtSecret, { algorithms: ['HS256'] });
+          if (session.purpose !== 'customer-action') return acknowledge(callback, { ok: false, error: 'Invalid customer session token' });
+        } catch (error) {
+          if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') return acknowledge(callback, { ok: false, error: 'Customer session expired. Refresh the page and try again.' });
+          throw error;
+        }
+        if (!hasOnlyKeys(payload, ['sessionToken', 'tableNumber', 'customerName', 'customerPhone', 'orderingMode', 'total', 'items'])) return acknowledge(callback, { ok: false, error: 'Order payload contains unsupported fields' });
+        let tableNumber;
+        let customerName;
+        try {
+          tableNumber = sanitizeText(payload.tableNumber, { minLength: 1, maxLength: 30, field: 'Table number' });
+          customerName = payload.customerName === undefined || payload.customerName === '' ? 'Guest' : sanitizeText(payload.customerName, { minLength: 1, maxLength: 120, field: 'Customer name' });
+        } catch (error) { return acknowledge(callback, { ok: false, error: error.message }); }
+        const customerPhone = typeof payload.customerPhone === 'string' ? payload.customerPhone.trim() : '';
+        if (!validateIndianMobile(customerPhone)) return acknowledge(callback, { ok: false, error: 'Enter a valid 10-digit Indian mobile number' });
         if (!Array.isArray(payload.items) || payload.items.length < 1 || payload.items.length > 50) return acknowledge(callback, { ok: false, error: 'Order must contain between 1 and 50 items' });
 
         const requested = [];
         for (const line of payload.items) {
           const menuItemId = line?.menuItemId;
           const quantity = Number(line?.quantity);
-          if (!mongoose.isValidObjectId(menuItemId) || !Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
-            return acknowledge(callback, { ok: false, error: 'Each item needs a valid menuItemId and quantity from 1 to 99' });
+          if (!isPlainObject(line) || !mongoose.isValidObjectId(menuItemId) || !Number.isInteger(quantity) || quantity < 1 || quantity > 50) {
+            return acknowledge(callback, { ok: false, error: 'Each item needs a valid menuItemId and quantity from 1 to 50' });
           }
-          const customNotes = typeof line.customNotes === 'string' ? line.customNotes.trim() : '';
-          if (customNotes.length > 1000) return acknowledge(callback, { ok: false, error: 'Item notes are too long' });
+          if (line.customNotes !== undefined && typeof line.customNotes !== 'string') return acknowledge(callback, { ok: false, error: 'Item notes must be text' });
+          let customNotes = '';
+          try { if (line.customNotes !== undefined) customNotes = sanitizeText(line.customNotes, { maxLength: 1000, field: 'Item notes' }); }
+          catch (error) { return acknowledge(callback, { ok: false, error: error.message }); }
           requested.push({ menuItemId, quantity, customNotes });
         }
 
@@ -98,10 +123,10 @@ function initializeOrderSockets(io) {
           if (!menuItem.isAvailable) return acknowledge(callback, { ok: false, error: `${menuItem.name} is currently out of stock` });
           const unitPriceCents = Math.round(Number(menuItem.price) * 100);
           totalCents += unitPriceCents * line.quantity;
-          orderItems.push({ ...line, itemName: menuItem.name, unitPrice: unitPriceCents / 100 });
+          orderItems.push({ ...line, itemName: menuItem.name, itemName_hi: menuItem.name_hi || '', itemName_mr: menuItem.name_mr || '', unitPrice: unitPriceCents / 100 });
         }
 
-        const order = await Order.create({ customerName, tableNumber, items: orderItems, totalAmount: totalCents / 100 });
+        const order = await Order.create({ customerName, customerPhone, tableNumber, items: orderItems, totalAmount: totalCents / 100 });
         const responseOrder = publicOrder(order);
         await socket.join(orderRoom(order.orderId));
         io.to(ADMIN_ROOM).emit('newOrderReceived', responseOrder);
@@ -116,6 +141,8 @@ function initializeOrderSockets(io) {
     socket.on('updateOrderStatus', async (payload = {}, callback) => {
       if (!socket.data.admin) return acknowledge(callback, { ok: false, error: 'Admin authentication required' });
       try {
+        if (!limitSocketActions(socket, 'updateOrderStatus', callback, acknowledge)) return;
+        if (!hasOnlyKeys(payload, ['orderId', 'status'])) return acknowledge(callback, { ok: false, error: 'Status payload contains unsupported fields' });
         const { orderId, status } = payload;
         if (typeof orderId !== 'string' || typeof status !== 'string') return acknowledge(callback, { ok: false, error: 'orderId and status are required' });
         const order = await Order.findOne({ orderId });

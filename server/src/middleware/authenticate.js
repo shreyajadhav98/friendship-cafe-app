@@ -8,6 +8,7 @@ async function authenticate(req, res, next) {
   if (scheme !== 'Bearer' || !token) return res.status(401).json({ error: 'Authentication required' });
   try {
     const payload = jwt.verify(token, getConfig().jwtSecret, { algorithms: ['HS256'] });
+    if (payload.purpose && payload.purpose !== 'admin') return res.status(401).json({ error: 'Invalid or expired token' });
     const user = await User.findById(payload.sub).select('_id username role');
     if (!user || user.role !== 'admin') return res.status(401).json({ error: 'Invalid or expired token' });
     req.user = user;
@@ -18,4 +19,4 @@ async function authenticate(req, res, next) {
   }
 }
 
-module.exports = { authenticate };
+module.exports = { authenticate, verifyAdmin: authenticate };

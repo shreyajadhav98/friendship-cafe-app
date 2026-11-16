@@ -10,7 +10,7 @@ router.get('/', authenticate, async (req, res, next) => {
     const orders = await Order.find({ orderStatus: { $ne: 'Cancelled' } })
       .sort({ createdAt: -1 })
       .limit(200)
-      .populate('items.menuItemId', 'name price')
+      .populate('items.menuItemId', 'name name_hi name_mr price')
       .lean();
     return res.json({ orders: orders.map(publicOrder) });
   } catch (error) { return next(error); }

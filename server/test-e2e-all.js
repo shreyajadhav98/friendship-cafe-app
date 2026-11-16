@@ -114,13 +114,16 @@ async function run() {
     // An authenticated kitchen socket must be listening before the guest submits a ticket.
     const login = await request(baseUrl).post('/api/auth/login').send({ username: ADMIN_USERNAME, password: ADMIN_PASSWORD }).expect(200);
     assert.equal(typeof login.body.token, 'string');
+    const customerSession = await request(baseUrl).get('/api/auth/session-token').expect(200);
     adminSocket = connectSocket(baseUrl, { auth: { token: login.body.token }, transports: ['websocket'] });
     customerSocket = connectSocket(baseUrl, { transports: ['websocket'] });
     await Promise.all([waitForConnect(adminSocket), waitForConnect(customerSocket)]);
 
     const kitchenTicketPromise = waitForSocketEvent(adminSocket, 'newOrderReceived');
     const customerOrderResult = await emitAck(customerSocket, 'placeOrder', {
+      sessionToken: customerSession.body.token,
       customerName: 'E2E Guest',
+      customerPhone: '9876543210',
       tableNumber: selectedTable,
       total: 0.01,
       items: [
@@ -156,14 +159,14 @@ async function run() {
     console.log('Admin: marked Blueberry Muffin out of stock; public menu reflects it.');
 
     const invalidIdResult = await emitAck(customerSocket, 'placeOrder', {
-      tableNumber: '3', items: [{ menuItemId: 'not-a-menu-id', quantity: 1 }]
+      sessionToken: customerSession.body.token, customerName: 'E2E Guest', customerPhone: '9876543210', tableNumber: '3', items: [{ menuItemId: 'not-a-menu-id', quantity: 1 }]
     });
     assert.equal(invalidIdResult.ok, false, 'Invalid menu IDs must be rejected.');
     const zeroQuantityResult = await emitAck(customerSocket, 'placeOrder', {
-      tableNumber: '3', items: [{ menuItemId: String(menuByName.get('Cafe Latte')._id), quantity: 0 }]
+      sessionToken: customerSession.body.token, customerName: 'E2E Guest', customerPhone: '9876543210', tableNumber: '3', items: [{ menuItemId: String(menuByName.get('Cafe Latte')._id), quantity: 0 }]
     });
     assert.equal(zeroQuantityResult.ok, false, 'Zero quantities must be rejected.');
-    const emptyOrderResult = await emitAck(customerSocket, 'placeOrder', { tableNumber: '3', items: [] });
+    const emptyOrderResult = await emitAck(customerSocket, 'placeOrder', { sessionToken: customerSession.body.token, customerName: 'E2E Guest', customerPhone: '9876543210', tableNumber: '3', items: [] });
     assert.equal(emptyOrderResult.ok, false, 'Empty orders must be rejected.');
     assert.equal(await Order.countDocuments({}), 1, 'Rejected order payloads must not be saved.');
 
@@ -196,7 +199,7 @@ async function run() {
     console.log(`Billing: order billed at ₹13.39 (subtotal ₹12.75 + tax ₹0.64); payment is Paid.`);
 
     const pendingConfessionEvent = waitForSocketEvent(adminSocket, 'newPendingConfession');
-    const confession = await request(baseUrl).post('/api/confessions').send({ messageText: 'E2E confession: the cinnamon latte made my morning.' }).expect(201);
+    const confession = await request(baseUrl).post('/api/confessions').set({ 'X-Customer-Session': customerSession.body.token }).send({ messageText: 'E2E confession: the cinnamon latte made my morning.' }).expect(201);
     confessionId = confession.body.confession._id;
     assert.equal(confession.body.confession.isApproved, false);
     await pendingConfessionEvent;
@@ -213,7 +216,7 @@ async function run() {
 
     const eventDate = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const eventCreated = waitForSocketEvent(adminSocket, 'new_event_booking', (booking) => booking.eventType === 'Birthday Party');
-    const eventResponse = await request(baseUrl).post('/api/events').send({ customerName: 'E2E Celebration Guest', phone: '+919876543210', eventType: 'Birthday Party', eventDate, startTime: '11:00', endTime: '13:00', guestCount: 24, bookingSpace: 'Full Cafe', cateringPreference: 'Standard Menu', estimatedBudget: 18000 }).expect(201);
+    const eventResponse = await request(baseUrl).post('/api/events').set({ 'X-Customer-Session': customerSession.body.token }).send({ customerName: 'E2E Celebration Guest', phone: '9876543210', eventType: 'Birthday Party', eventDate, startTime: '11:00', endTime: '13:00', guestCount: 24, bookingSpace: 'Full Cafe', cateringPreference: 'Standard Menu', estimatedBudget: 18000 }).expect(201);
     const eventBooking = eventResponse.body.booking;
     assert.match(eventBooking.bookingId, /^EVT-[A-F0-9]{4}$/);
     assert.equal((await eventCreated).bookingId, eventBooking.bookingId);
@@ -221,7 +224,7 @@ async function run() {
     const approvedEvent = waitForSocketEvent(adminSocket, 'event_status_updated', (booking) => booking.bookingId === eventBooking.bookingId && booking.status === 'Approved');
     await request(baseUrl).patch(`/api/events/${eventBooking.id}/status`).set(adminHeaders).send({ status: 'Approved', adminNotes: 'E2E approval' }).expect(200);
     await approvedEvent;
-    await request(baseUrl).post('/api/events').send({ customerName: 'Conflict Guest', phone: '+919876543211', eventType: 'Corporate Meeting', eventDate, startTime: '12:00', endTime: '14:00', guestCount: 12, bookingSpace: 'Private Section', cateringPreference: 'No Catering' }).expect(409);
+    await request(baseUrl).post('/api/events').set({ 'X-Customer-Session': customerSession.body.token }).send({ customerName: 'Conflict Guest', phone: '9876543211', eventType: 'Corporate Meeting', eventDate, startTime: '12:00', endTime: '14:00', guestCount: 12, bookingSpace: 'Private Section', cateringPreference: 'No Catering' }).expect(409);
     const completedEvent = waitForSocketEvent(adminSocket, 'event_status_updated', (booking) => booking.bookingId === eventBooking.bookingId && booking.status === 'Completed');
     await request(baseUrl).patch(`/api/events/${eventBooking.id}/status`).set(adminHeaders).send({ status: 'Completed' }).expect(200);
     await completedEvent;

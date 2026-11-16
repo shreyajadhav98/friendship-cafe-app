@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import LanguageSwitcher from '../components/LanguageSwitcher';
 import { useLanguage } from '../context/LanguageContext';
+import { getCustomerSessionToken } from '../customerSession';
 import { io } from 'socket.io-client';
 import { API_ROOT, apiRequest } from '../api';
 
@@ -38,7 +39,8 @@ export default function ConfessionWall() {
   async function submitConfession(event) {
     event.preventDefault(); setError(''); setNotice(''); setSubmitting(true);
     try {
-      await apiRequest('/api/confessions', { method: 'POST', body: JSON.stringify({ messageText }) });
+      const customerSessionToken = await getCustomerSessionToken();
+      await apiRequest('/api/confessions', { customerSessionToken, method: 'POST', body: JSON.stringify({ messageText }) });
       setMessageText(''); setNotice('Your note is in the queue. It will appear here after moderation.');
     } catch (err) { setError(err.message); }
     finally { setSubmitting(false); }

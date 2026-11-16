@@ -1,11 +1,12 @@
 export const API_ROOT = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 
-export async function apiRequest(path, { token, ...options } = {}) {
+export async function apiRequest(path, { token, customerSessionToken, ...options } = {}) {
   const response = await fetch(`${API_ROOT}${path}`, {
     ...options,
     headers: {
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(customerSessionToken ? { 'X-Customer-Session': customerSessionToken } : {}),
       ...options.headers
     }
   });

@@ -2,8 +2,11 @@ const express = require('express');
 const shortid = require('shortid');
 const { Bill, Order, Menu } = require('../models');
 const { authenticate } = require('../middleware/authenticate');
+const { createRateLimiter } = require('../middleware/rateLimit');
+const { hasOnlyKeys } = require('../utils/input');
 
 const router = express.Router();
+const billingLimiter = createRateLimiter({ windowMs: 60_000, max: 20, message: 'Too many billing requests. Please wait before trying again.' });
 const TAX_RATE = 0.05;
 const PAYMENT_MODES = new Set(['Cash', 'UPI', 'Card']);
 const money = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
@@ -19,6 +22,8 @@ function formatReceipt(bill, order) {
       const unitPrice = Number.isFinite(item.unitPrice) ? item.unitPrice : (item.menuItemId?.price || 0);
       return {
         name: item.itemName || item.menuItemId?.name || 'Menu item',
+        name_hi: item.itemName_hi || item.menuItemId?.name_hi || '',
+        name_mr: item.itemName_mr || item.menuItemId?.name_mr || '',
         quantity: item.quantity,
         unitPrice,
         lineTotal: money(unitPrice * item.quantity),
@@ -35,14 +40,15 @@ function formatReceipt(bill, order) {
   };
 }
 
-router.post('/generate', authenticate, async (req, res, next) => {
+router.post('/generate', authenticate, billingLimiter, async (req, res, next) => {
   try {
+    if (!hasOnlyKeys(req.body, ['orderId', 'paymentMode', 'discount'])) return res.status(400).json({ error: 'Billing payload contains unsupported fields' });
     const { orderId } = req.body || {};
     if (typeof orderId !== 'string' || !orderId.trim()) return res.status(400).json({ error: 'orderId is required' });
     const paymentMode = typeof req.body.paymentMode === 'string' ? req.body.paymentMode.trim() : '';
     if (!PAYMENT_MODES.has(paymentMode)) return res.status(400).json({ error: 'paymentMode must be Cash, UPI, or Card' });
 
-    const order = await Order.findOne({ orderId: orderId.trim() }).populate('items.menuItemId', 'name price');
+    const order = await Order.findOne({ orderId: orderId.trim() }).populate('items.menuItemId', 'name name_hi name_mr price');
     if (!order) return res.status(404).json({ error: 'Order not found' });
     if (order.orderStatus !== 'Completed') return res.status(409).json({ error: 'Billing is available only for completed orders' });
 
@@ -92,7 +98,7 @@ router.post('/generate', authenticate, async (req, res, next) => {
         return res.status(409).json({ error: 'Order payment status changed before the bill could be finalized' });
       }
     }
-    const paidOrder = await Order.findById(order._id).populate('items.menuItemId', 'name price');
+    const paidOrder = await Order.findById(order._id).populate('items.menuItemId', 'name name_hi name_mr price');
     return res.status(201).json({ bill, receipt: formatReceipt(bill, paidOrder), alreadyGenerated: false });
   } catch (error) { return next(error); }
 });
@@ -101,7 +107,7 @@ router.get('/receipt/:billId', authenticate, async (req, res, next) => {
   try {
     const bill = await Bill.findOne({ billId: req.params.billId });
     if (!bill) return res.status(404).json({ error: 'Receipt not found' });
-    const order = await Order.findOne({ orderId: bill.orderId }).populate('items.menuItemId', 'name price');
+    const order = await Order.findOne({ orderId: bill.orderId }).populate('items.menuItemId', 'name name_hi name_mr price');
     return res.json({ receipt: formatReceipt(bill, order) });
   } catch (error) { return next(error); }
 });
@@ -122,11 +128,11 @@ router.get('/summary', authenticate, async (req, res, next) => {
         { $lookup: { from: Order.collection.name, localField: 'orderId', foreignField: 'orderId', as: 'order' } },
         { $unwind: '$order' },
         { $unwind: '$order.items' },
-        { $group: { _id: '$order.items.menuItemId', itemName: { $first: '$order.items.itemName' }, quantity: { $sum: '$order.items.quantity' }, revenue: { $sum: { $multiply: ['$order.items.unitPrice', '$order.items.quantity'] } } } },
+        { $group: { _id: '$order.items.menuItemId', itemName: { $first: '$order.items.itemName' }, itemName_hi: { $first: '$order.items.itemName_hi' }, itemName_mr: { $first: '$order.items.itemName_mr' }, quantity: { $sum: '$order.items.quantity' }, revenue: { $sum: { $multiply: ['$order.items.unitPrice', '$order.items.quantity'] } } } },
         { $sort: { quantity: -1, revenue: -1 } },
         { $limit: 5 },
         { $lookup: { from: Menu.collection.name, localField: '_id', foreignField: '_id', as: 'menuItem' } },
-        { $project: { _id: 0, menuItemId: '$_id', name: { $ifNull: [{ $cond: [{ $ne: ['$itemName', ''] }, '$itemName', null] }, { $arrayElemAt: ['$menuItem.name', 0] }] }, quantity: 1, revenue: { $round: ['$revenue', 2] } } }
+        { $project: { _id: 0, menuItemId: '$_id', name: { $ifNull: [{ $cond: [{ $ne: ['$itemName', ''] }, '$itemName', null] }, { $arrayElemAt: ['$menuItem.name', 0] }] }, name_hi: { $ifNull: [{ $cond: [{ $ne: ['$itemName_hi', ''] }, '$itemName_hi', null] }, { $arrayElemAt: ['$menuItem.name_hi', 0] }] }, name_mr: { $ifNull: [{ $cond: [{ $ne: ['$itemName_mr', ''] }, '$itemName_mr', null] }, { $arrayElemAt: ['$menuItem.name_mr', 0] }] }, quantity: 1, revenue: { $round: ['$revenue', 2] } } }
       ])
     ]);
 

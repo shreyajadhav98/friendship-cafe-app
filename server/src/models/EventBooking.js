@@ -25,7 +25,7 @@ const eventBookingSchema = new mongoose.Schema({
   eventDate: { type: Date, required: true },
   startTime: { type: String, required: true, match: /^([01]\d|2[0-3]):[0-5]\d$/ },
   endTime: { type: String, required: true, match: /^([01]\d|2[0-3]):[0-5]\d$/ },
-  guestCount: { type: Number, required: true, min: 1, max: 1000 },
+  guestCount: { type: Number, required: true, min: 1, max: 500 },
   bookingSpace: { type: String, enum: bookingSpaces, default: 'Private Section', required: true },
   cateringPreference: { type: String, enum: cateringPreferences, required: true },
   specialRequests: { type: String, default: '', trim: true, maxlength: 3000 },

@@ -3,9 +3,15 @@ const mongoose = require('mongoose');
 const { Confession } = require('../models');
 const { authenticate } = require('../middleware/authenticate');
 const { ADMIN_ROOM } = require('../sockets/orders');
+const { createRateLimiter } = require('../middleware/rateLimit');
+const { verifyCustomerSession } = require('../middleware/verifyCustomerSession');
+const { sanitizeText, hasOnlyKeys } = require('../utils/input');
 
 const router = express.Router();
 const MAX_MESSAGE_LENGTH = 500;
+const postLimiter = createRateLimiter({ windowMs: 15 * 60_000, max: 5, message: 'Too many confession posts. Please wait before posting again.' });
+const likeLimiter = createRateLimiter({ windowMs: 60_000, max: 30, message: 'Too many likes. Please slow down.' });
+const moderationLimiter = createRateLimiter({ windowMs: 60_000, max: 60, message: 'Too many moderation actions. Please wait before trying again.' });
 
 router.get('/', async (req, res, next) => {
   try {
@@ -14,18 +20,18 @@ router.get('/', async (req, res, next) => {
   } catch (error) { return next(error); }
 });
 
-router.post('/', async (req, res, next) => {
+router.post('/', postLimiter, verifyCustomerSession, async (req, res, next) => {
   try {
-    const messageText = typeof req.body?.messageText === 'string' ? req.body.messageText.trim() : '';
-    if (!messageText) return res.status(400).json({ error: 'A confession message is required' });
-    if (messageText.length > MAX_MESSAGE_LENGTH) return res.status(400).json({ error: `Confession must be ${MAX_MESSAGE_LENGTH} characters or fewer` });
+    if (!hasOnlyKeys(req.body, ['messageText'])) return res.status(400).json({ error: 'Confession payload must contain messageText only' });
+    const messageText = sanitizeText(req.body?.messageText, { minLength: 5, maxLength: MAX_MESSAGE_LENGTH, field: 'Confession' });
+    if (/\b(?:buy now|click here|free money|crypto giveaway)\b/i.test(messageText)) return res.status(400).json({ error: 'This message looks like spam. Please rewrite it.' });
     const confession = await Confession.create({ messageText, isApproved: false });
     req.app.get('io')?.to(ADMIN_ROOM).emit('newPendingConfession', confession.toObject());
     return res.status(201).json({ confession });
   } catch (error) { return next(error); }
 });
 
-router.patch('/:id/like', async (req, res, next) => {
+router.patch('/:id/like', likeLimiter, async (req, res, next) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Invalid confession id' });
     const confession = await Confession.findOneAndUpdate({ _id: req.params.id, isApproved: true }, { $inc: { likesCount: 1 } }, { new: true });
@@ -41,7 +47,7 @@ router.get('/pending', authenticate, async (req, res, next) => {
   } catch (error) { return next(error); }
 });
 
-router.patch('/:id/approve', authenticate, async (req, res, next) => {
+router.patch('/:id/approve', authenticate, moderationLimiter, async (req, res, next) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Invalid confession id' });
     const confession = await Confession.findOneAndUpdate({ _id: req.params.id, isApproved: false }, { $set: { isApproved: true } }, { new: true });
@@ -52,7 +58,7 @@ router.patch('/:id/approve', authenticate, async (req, res, next) => {
   } catch (error) { return next(error); }
 });
 
-router.delete('/:id', authenticate, async (req, res, next) => {
+router.delete('/:id', authenticate, moderationLimiter, async (req, res, next) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ error: 'Invalid confession id' });
     const confession = await Confession.findByIdAndDelete(req.params.id);

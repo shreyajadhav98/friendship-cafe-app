@@ -15,6 +15,7 @@ function createApp() {
   const config = getConfig();
   const app = express();
   app.disable('x-powered-by');
+  app.set('trust proxy', 1);
   app.use(cors({ origin: createOriginValidator(config), credentials: true }));
   app.use(express.json({ limit: '1mb' }));
   app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
@@ -36,6 +37,7 @@ function createApp() {
     if (res.headersSent) return next(error);
     if (error.type === 'entity.too.large') return res.status(413).json({ error: 'Request body is too large' });
     if (error instanceof SyntaxError && error.status === 400 && 'body' in error) return res.status(400).json({ error: 'Malformed JSON request body' });
+    if (error instanceof TypeError || error instanceof RangeError) return res.status(400).json({ error: error.message });
     if (error.message === 'Origin is not allowed by CORS') return res.status(403).json({ error: 'Origin is not allowed by CORS' });
     if (error.name === 'ValidationError' || error.name === 'CastError' || error.code === 11000) {
       return res.status(400).json({ error: error.code === 11000 ? 'A record with that unique value already exists' : error.message });

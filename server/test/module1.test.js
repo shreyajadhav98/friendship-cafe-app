@@ -13,6 +13,7 @@ const { User, Menu, Order, Confession, Bill, EventBooking } = require('../src/mo
 const { authenticate } = require('../src/middleware/authenticate');
 const { createHttpServer } = require('../src/server');
 const { generateQrCodes } = require('../scripts/generate-table-qrs');
+const { translations: menuTranslations, categories: categoryTranslations } = require('../scripts/translateMenuItems');
 
 const uri = process.env.TEST_MONGODB_URI;
 if (!uri) throw new Error('TEST_MONGODB_URI is required. Use a dedicated test database before running tests.');
@@ -66,6 +67,12 @@ test('all five Mongoose models create and fetch database records', async () => {
   assert.equal(await bcrypt.compare('integration-password-123', fetchedUser.passwordHash), true);
 });
 
+test('translation catalog covers all 82 legacy menu names and every menu category', () => {
+  assert.equal(Object.keys(menuTranslations).length, 82);
+  for (const pair of Object.values(menuTranslations)) assert.ok(pair.every((value) => typeof value === 'string' && value.trim()));
+  for (const pair of Object.values(categoryTranslations)) assert.ok(pair.every((value) => typeof value === 'string' && value.trim()));
+});
+
 test('menu read is public while every write route requires the Module 1 admin token', async () => {
   const publicMenu = await request(app).get('/api/menu').expect(200);
   assert.equal(publicMenu.body.items.some((item) => item._id === menu.id), true);
@@ -114,6 +121,7 @@ test('Socket.io customer order reaches kitchen, uses database pricing, and track
   const address = httpServer.address();
   const baseUrl = `http://127.0.0.1:${address.port}`;
   const login = await request(app).post('/api/auth/login').send({ username: 'module1-admin', password: 'integration-password-123' }).expect(200);
+  const customerSession = await request(app).get('/api/auth/session-token').expect(200);
   const adminSocket = connectSocket(baseUrl, { auth: { token: login.body.token }, transports: ['websocket'] });
   const customerSocket = connectSocket(baseUrl, { transports: ['websocket'] });
   let resumedCustomerSocket;
@@ -122,7 +130,7 @@ test('Socket.io customer order reaches kitchen, uses database pricing, and track
     await Promise.all([waitForConnect(adminSocket), waitForConnect(customerSocket)]);
     const kitchenOrderPromise = waitForSocketEvent(adminSocket, 'newOrderReceived');
     const placed = await emitAck(customerSocket, 'placeOrder', {
-      customerName: 'Socket Test Guest', tableNumber: 'T-SOCK', total: 0.01,
+      sessionToken: customerSession.body.token, customerName: 'Socket Test Guest', customerPhone: '9876543210', tableNumber: 'T-SOCK', total: 0.01,
       items: [{ menuItemId: menu.id, quantity: 2, customNotes: 'No sugar' }]
     });
     createdOrderId = placed.order.orderId;
@@ -166,6 +174,9 @@ test('Socket.io customer order reaches kitchen, uses database pricing, and track
 test('admin CRUD works and availability changes are visible in the public menu immediately', async () => {
   const login = await request(app).post('/api/auth/login').send({ username: 'module1-admin', password: 'integration-password-123' }).expect(200);
   const auth = { Authorization: `Bearer ${login.body.token}` };
+  await request(app).post('/api/menu').set(auth).send({ name: { $ne: '' }, category: 'Snacks', price: 1, prepTimeMinutes: 1 }).expect(400);
+  await request(app).post('/api/menu').set(auth).send({ name: '<script>alert(1)</script>', category: 'Snacks', price: 1, prepTimeMinutes: 1 }).expect(400);
+  await request(app).post('/api/menu').set(auth).send({ name: 'Invalid price', category: 'Snacks', price: -1, prepTimeMinutes: 1 }).expect(400);
   const created = await request(app).post('/api/menu').set(auth).send({ name: 'Test muffin', category: 'Snacks', description: 'Fresh baked', price: 3.25, prepTimeMinutes: 8 }).expect(201);
   assert.equal(created.body.item.isAvailable, true);
   const id = created.body.item._id;
@@ -181,6 +192,26 @@ test('admin CRUD works and availability changes are visible in the public menu i
   await request(app).patch(`/api/menu/${id}/is-available`).set(auth).send({ isAvailable: true }).expect(200);
   assert.equal((await request(app).get('/api/menu?available=true')).body.items.some((item) => item._id === id), true);
   await request(app).delete(`/api/menu/${id}`).set(auth).expect(200);
+});
+
+test('event and confession forms reject invalid, injected, and rapid customer submissions', async () => {
+  const isolatedApp = createApp();
+  const session = await request(isolatedApp).get('/api/auth/session-token').expect(200);
+  const headers = { 'X-Customer-Session': session.body.token, 'X-Forwarded-For': '203.0.113.21' };
+  const futureDate = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const payload = { customerName: 'Event Guest', phone: '9876543210', eventType: 'Birthday Party', eventDate: futureDate, startTime: '10:00', endTime: '12:00', guestCount: 20, bookingSpace: 'Private Section', cateringPreference: 'Standard Menu' };
+  await request(isolatedApp).post('/api/events').set(headers).send({ ...payload, customerName: '<script>alert(1)</script>' }).expect(400);
+  await request(isolatedApp).post('/api/events').set(headers).send({ ...payload, phone: '123' }).expect(400);
+  await request(isolatedApp).post('/api/events').set(headers).send({ ...payload, eventDate: '2000-01-01' }).expect(400);
+  await request(isolatedApp).post('/api/events').set(headers).send({ ...payload, startTime: '14:00', endTime: '12:00' }).expect(400);
+  await request(isolatedApp).post('/api/events').set(headers).send({ ...payload, guestCount: 501 }).expect(400);
+  await request(isolatedApp).post('/api/events').set(headers).send(payload).expect(429);
+
+  const wallApp = createApp();
+  const wallSession = await request(wallApp).get('/api/auth/session-token').expect(200);
+  const wallHeaders = { 'X-Customer-Session': wallSession.body.token };
+  await request(wallApp).post('/api/confessions').set(wallHeaders).send({ messageText: '<img src=x onerror=alert(1)> hello' }).expect(400);
+  await request(wallApp).post('/api/confessions').set(wallHeaders).send({ messageText: 'This message is fine.', isApproved: true }).expect(400);
 });
 
 test('billing taxes the Module 3 completed order, marks it paid, and updates financial summaries', async () => {
@@ -235,11 +266,13 @@ test('anonymous confession stays private until approval, then broadcasts and bec
     await waitForConnect(wallSocket);
     const publicBefore = await request(liveApp).get('/api/confessions').expect(200);
     const login = await request(liveApp).post('/api/auth/login').send({ username: 'module1-admin', password: 'integration-password-123' }).expect(200);
+    const customerSession = await request(liveApp).get('/api/auth/session-token').expect(200);
     const auth = { Authorization: `Bearer ${login.body.token}` };
     const adminSocket = connectSocket(`http://127.0.0.1:${httpServer.address().port}`, { auth: { token: login.body.token }, transports: ['websocket'] });
     await waitForConnect(adminSocket);
     const pendingBroadcast = waitForSocketEvent(adminSocket, 'newPendingConfession');
-    const submitted = await request(liveApp).post('/api/confessions').send({ messageText: 'The rain sounds better with a warm latte.' }).expect(201);
+    await request(liveApp).post('/api/confessions').send({ messageText: 'unauthenticated confession' }).expect(403);
+    const submitted = await request(liveApp).post('/api/confessions').set({ 'X-Customer-Session': customerSession.body.token }).send({ messageText: 'The rain sounds better with a warm latte.' }).expect(201);
     confessionId = submitted.body.confession._id;
     assert.equal(submitted.body.confession.isApproved, false);
     assert.equal((await pendingBroadcast)._id, confessionId);
@@ -297,6 +330,7 @@ test('event bookings validate availability, protect admin routes, and broadcast 
   await new Promise((resolve, reject) => { httpServer.once('error', reject); httpServer.listen(0, '127.0.0.1', resolve); });
   const baseUrl = `http://127.0.0.1:${httpServer.address().port}`;
   const login = await request(liveApp).post('/api/auth/login').send({ username: 'module1-admin', password: 'integration-password-123' }).expect(200);
+  const customerSession = await request(liveApp).get('/api/auth/session-token').expect(200);
   const headers = { Authorization: `Bearer ${login.body.token}` };
   const adminSocket = connectSocket(baseUrl, { auth: { token: login.body.token }, transports: ['websocket'] });
   const createdIds = [];
@@ -305,10 +339,11 @@ test('event bookings validate availability, protect admin routes, and broadcast 
     await request(liveApp).get('/api/events').expect(401);
     await request(liveApp).patch('/api/events/not-an-id/status').send({ status: 'Approved' }).expect(401);
     const eventDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const bookingPayload = (overrides = {}) => ({ customerName: 'Event Guest', phone: '+919876543210', email: 'guest@example.com', eventType: 'Birthday Party', eventDate, startTime: '10:00', endTime: '12:00', guestCount: 35, bookingSpace: 'Full Cafe', cateringPreference: 'Custom Buffet', specialRequests: 'Small cake table', estimatedBudget: 25000, ...overrides });
+    const bookingPayload = (overrides = {}) => ({ customerName: 'Event Guest', phone: '9876543210', email: 'guest@example.com', eventType: 'Birthday Party', eventDate, startTime: '10:00', endTime: '12:00', guestCount: 35, bookingSpace: 'Full Cafe', cateringPreference: 'Custom Buffet', specialRequests: 'Small cake table', estimatedBudget: 25000, ...overrides });
 
+    await request(liveApp).post('/api/events').send(bookingPayload()).expect(403);
     const newBookingEvent = waitForSocketEvent(adminSocket, 'new_event_booking');
-    const birthday = await request(liveApp).post('/api/events').send(bookingPayload()).expect(201);
+    const birthday = await request(liveApp).post('/api/events').set({ 'X-Customer-Session': customerSession.body.token }).send(bookingPayload()).expect(201);
     createdIds.push(birthday.body.booking.bookingId);
     assert.match(birthday.body.booking.bookingId, /^EVT-[A-F0-9]{4}$/);
     assert.equal((await newBookingEvent).bookingId, birthday.body.booking.bookingId);
@@ -317,10 +352,10 @@ test('event bookings validate availability, protect admin routes, and broadcast 
     await request(liveApp).patch(`/api/events/${birthday.body.booking.id}/status`).set(headers).send({ status: 'Approved', adminNotes: 'Private setup confirmed' }).expect(200);
     await approvedEvent;
 
-    await request(liveApp).post('/api/events').send(bookingPayload({ eventType: 'Corporate Meeting', bookingSpace: 'Private Section', startTime: '11:00', endTime: '13:00' })).expect(409);
-    const corporate = await request(liveApp).post('/api/events').send(bookingPayload({ eventType: 'Corporate Meeting', bookingSpace: 'Private Section', startTime: '13:00', endTime: '14:00' })).expect(201);
+    await request(liveApp).post('/api/events').set({ 'X-Customer-Session': customerSession.body.token }).send(bookingPayload({ eventType: 'Corporate Meeting', bookingSpace: 'Private Section', startTime: '11:00', endTime: '13:00' })).expect(409);
+    const corporate = await request(liveApp).post('/api/events').set({ 'X-Customer-Session': customerSession.body.token }).send(bookingPayload({ eventType: 'Corporate Meeting', bookingSpace: 'Private Section', startTime: '13:00', endTime: '14:00' })).expect(201);
     createdIds.push(corporate.body.booking.bookingId);
-    const openMic = await request(liveApp).post('/api/events').send(bookingPayload({ eventType: 'Open Mic Night', bookingSpace: 'Outdoor Patio', startTime: '14:00', endTime: '16:00' })).expect(201);
+    const openMic = await request(liveApp).post('/api/events').set({ 'X-Customer-Session': customerSession.body.token }).send(bookingPayload({ eventType: 'Open Mic Night', bookingSpace: 'Outdoor Patio', startTime: '14:00', endTime: '16:00' })).expect(201);
     createdIds.push(openMic.body.booking.bookingId);
     const availability = await request(liveApp).get(`/api/events/availability?date=${eventDate}`).expect(200);
     assert.equal(availability.body.slots.length, 3);

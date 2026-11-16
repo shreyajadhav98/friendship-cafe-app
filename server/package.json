@@ -11,6 +11,7 @@
     "test:e2e": "node test-e2e-all.js",
     "test:socket": "node --test --test-name-pattern=Socket.io test/module1.test.js",
     "admin:create": "node scripts/create-admin.js",
+    "menu:translate": "node scripts/translateMenuItems.js",
     "qr:generate": "node scripts/generate-table-qrs.js"
   },
   "engines": {
