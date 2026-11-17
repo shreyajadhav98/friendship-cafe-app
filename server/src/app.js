@@ -21,6 +21,7 @@ function createApp() {
   app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
   app.use('/api/auth', authRoutes);
   app.use('/api/menu', menuRoutes);
+  app.use('/api/menus', menuRoutes);
   app.use('/api/orders', orderRoutes);
   app.use('/api/billing', billingRoutes);
   app.use('/api/confessions', confessionRoutes);

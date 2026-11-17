@@ -13,7 +13,8 @@ const { User, Menu, Order, Confession, Bill, EventBooking } = require('../src/mo
 const { authenticate } = require('../src/middleware/authenticate');
 const { createHttpServer } = require('../src/server');
 const { generateQrCodes } = require('../scripts/generate-table-qrs');
-const { translations: menuTranslations, categories: categoryTranslations } = require('../scripts/translateMenuItems');
+const { translations: menuTranslations, categories: categoryTranslations, menuEntries } = require('../scripts/translateMenuItems');
+const { getMenuTranslation, getCategoryTranslation } = require('../src/utils/menuTranslator');
 
 const uri = process.env.TEST_MONGODB_URI;
 if (!uri) throw new Error('TEST_MONGODB_URI is required. Use a dedicated test database before running tests.');
@@ -68,9 +69,13 @@ test('all five Mongoose models create and fetch database records', async () => {
 });
 
 test('translation catalog covers all 82 legacy menu names and every menu category', () => {
-  assert.equal(Object.keys(menuTranslations).length, 82);
+  assert.equal(menuEntries.length, 82);
+  assert.equal(Object.keys(categoryTranslations).length, 11);
   for (const pair of Object.values(menuTranslations)) assert.ok(pair.every((value) => typeof value === 'string' && value.trim()));
   for (const pair of Object.values(categoryTranslations)) assert.ok(pair.every((value) => typeof value === 'string' && value.trim()));
+  assert.equal(getMenuTranslation('ALOO TIKKI BURGER', 'burger', 50, 'hi'), 'आलू टिक्की बर्गर');
+  assert.equal(getMenuTranslation('Aloo Tikki Burger', 'Burger', 50, 'mr'), 'आलू टिक्की बर्गर');
+  assert.equal(getCategoryTranslation('BURGER', 'hi'), 'बर्गर');
 });
 
 test('menu read is public while every write route requires the Module 1 admin token', async () => {
@@ -177,8 +182,10 @@ test('admin CRUD works and availability changes are visible in the public menu i
   await request(app).post('/api/menu').set(auth).send({ name: { $ne: '' }, category: 'Snacks', price: 1, prepTimeMinutes: 1 }).expect(400);
   await request(app).post('/api/menu').set(auth).send({ name: '<script>alert(1)</script>', category: 'Snacks', price: 1, prepTimeMinutes: 1 }).expect(400);
   await request(app).post('/api/menu').set(auth).send({ name: 'Invalid price', category: 'Snacks', price: -1, prepTimeMinutes: 1 }).expect(400);
-  const created = await request(app).post('/api/menu').set(auth).send({ name: 'Test muffin', category: 'Snacks', description: 'Fresh baked', price: 3.25, prepTimeMinutes: 8 }).expect(201);
+  const created = await request(app).post('/api/menus').set(auth).send({ name: 'Test muffin', category: 'Snacks', description: 'Fresh baked', price: 3.25, prepTimeMinutes: 8 }).expect(201);
   assert.equal(created.body.item.isAvailable, true);
+  assert.ok(created.body.item.name_hi && created.body.item.name_mr);
+  assert.ok(created.body.item.category_hi && created.body.item.category_mr);
   const id = created.body.item._id;
 
   const updated = await request(app).put(`/api/menu/${id}`).set(auth).send({ price: 3.5, description: 'Warm fresh baked' }).expect(200);
@@ -191,6 +198,10 @@ test('admin CRUD works and availability changes are visible in the public menu i
   assert.equal(availableOnly.body.items.some((item) => item._id === id), false);
   await request(app).patch(`/api/menu/${id}/is-available`).set(auth).send({ isAvailable: true }).expect(200);
   assert.equal((await request(app).get('/api/menu?available=true')).body.items.some((item) => item._id === id), true);
+  const renamed = await request(app).put(`/api/menus/${id}`).set(auth).send({ name: 'Mango Shake', category: 'Thick Milkshake', price: 80, prepTimeMinutes: 8 }).expect(200);
+  assert.equal(renamed.body.item.name_hi, 'मैंगो शेक');
+  assert.equal(renamed.body.item.name_mr, 'मँगो शेक');
+  assert.equal(renamed.body.item.category_hi, 'थिक मिल्क शेक');
   await request(app).delete(`/api/menu/${id}`).set(auth).expect(200);
 });
 

@@ -14,7 +14,7 @@ const vite = await createServer({
   logLevel: 'silent',
 });
 const { LanguageProvider, useLanguage } = await vite.ssrLoadModule('/src/context/LanguageContext.jsx');
-const { getLocalizedMenuField, menuSearchText } = await vite.ssrLoadModule('/src/menuLocalization.js');
+const { getLocalizedMenuField, getLocalizedMenuItemName, getLocalizedCategoryName, menuSearchText } = await vite.ssrLoadModule('/src/menuLocalization.js');
 
 function LanguageProbe() {
   const { t, language } = useLanguage();
@@ -62,5 +62,14 @@ test('menu search content includes English, Hindi, and Marathi names/categories'
   const item = { name: 'Chai', name_hi: 'चाय', name_mr: 'चहा', category: 'Beverages', category_hi: 'पेय', category_mr: 'पेये' };
   const searchable = menuSearchText(item);
   for (const word of ['chai', 'चाय', 'चहा', 'beverages', 'पेय', 'पेये']) assert.ok(searchable.includes(word));
-  assert.equal(getLocalizedMenuField({ name: 'Coffee', name_hi: '' }, 'name', 'hi'), 'Coffee');
+  assert.equal(getLocalizedMenuField({ name: 'Coffee', name_hi: '' }, 'name', 'hi'), 'कॉफी');
+});
+
+test('owner-approved fallback renders exact item and category strings before an API migration', async () => {
+  const burger = { name: 'Aloo Tikki Burger', category: 'Burger' };
+  assert.equal(getLocalizedMenuItemName(burger, 'hi'), 'आलू टिक्की बर्गर');
+  assert.equal(getLocalizedMenuItemName(burger, 'mr'), 'आलू टिक्की बर्गर');
+  assert.equal(getLocalizedCategoryName('Burger', [], 'hi'), 'बर्गर');
+  assert.equal(getLocalizedCategoryName('Burger', [], 'mr'), 'बर्गर');
+  assert.notEqual(getLocalizedMenuItemName({ name: 'Test Muffin' }, 'hi'), 'Test Muffin');
 });

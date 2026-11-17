@@ -117,3 +117,5 @@ Object.assign(marathi, {
   'Description (English)': 'वर्णन (इंग्रजी)', 'Hindi description': 'हिंदी वर्णन', 'Marathi description': 'मराठी वर्णन',
   '10-digit Indian mobile number': '10 अंकी भारतीय मोबाइल नंबर', 'Customer phone': 'ग्राहकाचा फोन'
 });
+Object.assign(hindi, { 'Auto-Fill Hindi & Marathi': 'हिंदी और मराठी अपने-आप भरें' });
+Object.assign(marathi, { 'Auto-Fill Hindi & Marathi': 'हिंदी आणि मराठी आपोआप भरा' });

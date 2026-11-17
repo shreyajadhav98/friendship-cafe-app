@@ -4,6 +4,7 @@ const { Menu } = require('../models');
 const { authenticate } = require('../middleware/authenticate');
 const { sanitizeText, hasOnlyKeys } = require('../utils/input');
 const { createRateLimiter } = require('../middleware/rateLimit');
+const { translateMenuFields } = require('../utils/menuTranslator');
 
 const router = express.Router();
 const writeLimiter = createRateLimiter({ windowMs: 60_000, max: 30, message: 'Too many menu changes. Please wait before trying again.' });
@@ -54,7 +55,7 @@ router.get('/', async (req, res, next) => {
 
 router.post('/', authenticate, writeLimiter, async (req, res, next) => {
   try {
-    const data = pickFields(req.body || {}, true);
+    const data = translateMenuFields(pickFields(req.body || {}, true));
     const item = await Menu.create(data);
     return res.status(201).json({ item });
   } catch (error) { return next(error); }
@@ -65,6 +66,18 @@ router.put('/:id', authenticate, writeLimiter, async (req, res, next) => {
     if (!validId(req.params.id)) return res.status(400).json({ error: 'Invalid menu item id' });
     const data = pickFields(req.body || {});
     if (!Object.keys(data).length) return res.status(400).json({ error: 'At least one menu field is required' });
+    const existing = await Menu.findById(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Menu item not found' });
+    const merged = { ...existing.toObject(), ...data };
+    const nameChanged = Object.hasOwn(data, 'name') && data.name !== existing.name;
+    const categoryChanged = Object.hasOwn(data, 'category') && data.category !== existing.category;
+    if (nameChanged) for (const lang of ['hi', 'mr']) if (!data[`name_${lang}`] || data[`name_${lang}`] === existing[`name_${lang}`]) merged[`name_${lang}`] = '';
+    if (categoryChanged) for (const lang of ['hi', 'mr']) if (!data[`category_${lang}`] || data[`category_${lang}`] === existing[`category_${lang}`]) merged[`category_${lang}`] = '';
+    const localized = translateMenuFields(merged);
+    for (const lang of ['hi', 'mr']) {
+      data[`name_${lang}`] = localized[`name_${lang}`];
+      data[`category_${lang}`] = localized[`category_${lang}`];
+    }
     const item = await Menu.findByIdAndUpdate(req.params.id, { $set: data }, { new: true, runValidators: true });
     if (!item) return res.status(404).json({ error: 'Menu item not found' });
     return res.json({ item });
