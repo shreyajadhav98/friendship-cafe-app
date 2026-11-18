@@ -87,7 +87,9 @@ test('menu read is public while every write route requires the Module 1 admin to
   await request(app).patch(`/api/menu/${menu.id}/is-available`).send({ isAvailable: false }).expect(401);
   await request(app).delete(`/api/menu/${menu.id}`).expect(401);
   await request(app).get('/api/orders').expect(401);
+  await request(app).get('/api/orders?active=true').expect(401);
   await request(app).post('/api/billing/generate').send({ orderId: 'nope', paymentMode: 'Cash' }).expect(401);
+  await request(app).patch(`/api/orders/${menu.id}/complete`).expect(401);
   await request(app).get('/api/billing/summary').expect(401);
   await request(app).get('/api/billing/receipt/BILL-PRIVATE').expect(401);
   assert.equal(typeof authenticate, 'function');
@@ -120,12 +122,13 @@ function emitAck(socket, eventName, payload) {
   }));
 }
 
-test('Socket.io customer order reaches kitchen, uses database pricing, and tracks Ready status', async () => {
-  const { httpServer, io } = createHttpServer();
+test('Socket.io order reaches the kitchen and Complete & Clear archives it with live updates', async () => {
+  const { httpServer, io, app: liveApp } = createHttpServer();
   await new Promise((resolve, reject) => { httpServer.once('error', reject); httpServer.listen(0, '127.0.0.1', resolve); });
   const address = httpServer.address();
   const baseUrl = `http://127.0.0.1:${address.port}`;
   const login = await request(app).post('/api/auth/login').send({ username: 'module1-admin', password: 'integration-password-123' }).expect(200);
+  const auth = { Authorization: `Bearer ${login.body.token}` };
   const customerSession = await request(app).get('/api/auth/session-token').expect(200);
   const adminSocket = connectSocket(baseUrl, { auth: { token: login.body.token }, transports: ['websocket'] });
   const customerSocket = connectSocket(baseUrl, { transports: ['websocket'] });
@@ -146,7 +149,7 @@ test('Socket.io customer order reaches kitchen, uses database pricing, and track
     assert.equal(placed.order.totalAmount, Number((Number(menu.price) * 2).toFixed(2)));
     assert.notEqual(placed.order.totalAmount, 0.01);
     assert.equal((await Order.findOne({ orderId: placed.order.orderId })).items[0].itemName, menu.name);
-    const persistedOrders = await request(app).get('/api/orders').set({ Authorization: `Bearer ${login.body.token}` }).expect(200);
+    const persistedOrders = await request(liveApp).get('/api/orders').set(auth).expect(200);
     assert.equal(persistedOrders.body.orders.some((order) => order.orderId === placed.order.orderId), true);
 
     resumedCustomerSocket = connectSocket(baseUrl, { transports: ['websocket'] });
@@ -167,7 +170,25 @@ test('Socket.io customer order reaches kitchen, uses database pricing, and track
     assert.equal(trackedOrder.orderId, placed.order.orderId);
     assert.equal(trackedOrder.orderStatus, 'Ready');
     assert.equal((await Order.findOne({ orderId: placed.order.orderId })).orderStatus, 'Ready');
-    await emitAck(adminSocket, 'updateOrderStatus', { orderId: placed.order.orderId, status: 'Completed' });
+    const customerCompleted = waitForSocketEvent(customerSocket, 'orderStatusChanged', (order) => order.orderId === placed.order.orderId && order.orderStatus === 'Completed');
+    const kitchenCompleted = waitForSocketEvent(adminSocket, 'orderStatusUpdated', (order) => order.orderId === placed.order.orderId && order.orderStatus === 'Completed');
+    const completedResponse = await request(liveApp).patch(`/api/orders/${placed.order.id}/complete`).set(auth).expect(200);
+    assert.equal(completedResponse.body.order.orderStatus, 'Completed');
+    assert.ok(completedResponse.body.order.completedAt);
+    assert.equal((await customerCompleted).completedAt != null, true);
+    assert.equal((await kitchenCompleted).completedAt != null, true);
+    const persistedCompletedOrder = await Order.findOne({ orderId: placed.order.orderId });
+    assert.ok(persistedCompletedOrder, 'completed orders must remain stored');
+    assert.equal(persistedCompletedOrder.orderStatus, 'Completed');
+    assert.ok(persistedCompletedOrder.completedAt instanceof Date);
+    const repeatedComplete = await request(liveApp).patch(`/api/orders/${placed.order.id}/complete`).set(auth).expect(200);
+    assert.equal(repeatedComplete.body.alreadyCompleted, true);
+    assert.equal(new Date(repeatedComplete.body.order.completedAt).getTime(), persistedCompletedOrder.completedAt.getTime());
+    const active = await request(liveApp).get('/api/orders?active=true').set(auth).expect(200);
+    assert.equal(active.body.orders.some((order) => order.orderId === placed.order.orderId), false);
+    await request(liveApp).get('/api/orders?active=perhaps').set(auth).expect(400);
+    const history = await request(liveApp).get('/api/orders').set(auth).expect(200);
+    assert.equal(history.body.orders.some((order) => order.orderId === placed.order.orderId), true);
     module3CompletedOrderId = placed.order.orderId;
   } finally {
     if (createdOrderId && createdOrderId !== module3CompletedOrderId) await Order.deleteOne({ orderId: createdOrderId });
@@ -229,6 +250,7 @@ test('billing taxes the Module 3 completed order, marks it paid, and updates fin
   assert.ok(module3CompletedOrderId, 'Module 3 should leave a completed order for the billing test');
   const order = await Order.findOne({ orderId: module3CompletedOrderId });
   assert.equal(order.orderStatus, 'Completed');
+  assert.ok(order.completedAt instanceof Date);
   assert.equal(order.paymentStatus, 'Pending');
   const login = await request(app).post('/api/auth/login').send({ username: 'module1-admin', password: 'integration-password-123' }).expect(200);
   const auth = { Authorization: `Bearer ${login.body.token}` };

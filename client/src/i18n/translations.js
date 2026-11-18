@@ -119,3 +119,5 @@ Object.assign(marathi, {
 });
 Object.assign(hindi, { 'Auto-Fill Hindi & Marathi': 'हिंदी और मराठी अपने-आप भरें' });
 Object.assign(marathi, { 'Auto-Fill Hindi & Marathi': 'हिंदी आणि मराठी आपोआप भरा' });
+Object.assign(hindi, { 'Complete & Clear': 'पूरा करें और हटाएँ', 'Clearing…': 'हटाया जा रहा है…' });
+Object.assign(marathi, { 'Complete & Clear': 'पूर्ण करा आणि हटवा', 'Clearing…': 'काढत आहोत…' });

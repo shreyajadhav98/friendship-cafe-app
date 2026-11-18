@@ -33,6 +33,7 @@ function publicOrder(order) {
     totalAmount: order.totalAmount,
     paymentStatus: order.paymentStatus,
     orderStatus: order.orderStatus,
+    completedAt: order.completedAt || null,
     createdAt: order.createdAt,
     updatedAt: order.updatedAt
   };
@@ -149,6 +150,7 @@ function initializeOrderSockets(io) {
         if (!order) return acknowledge(callback, { ok: false, error: 'Order not found' });
         if (!statusTransitions[order.orderStatus]?.includes(status)) return acknowledge(callback, { ok: false, error: `Cannot change order from ${order.orderStatus} to ${status}` });
         order.orderStatus = status;
+        if (status === 'Completed' && !order.completedAt) order.completedAt = new Date();
         order.updatedAt = new Date();
         await order.save();
         const responseOrder = publicOrder(order);
