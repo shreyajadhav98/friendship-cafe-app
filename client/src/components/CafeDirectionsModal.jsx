@@ -1,13 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useLanguage } from '../context/LanguageContext';
 import { MapContainer, TileLayer, Polyline, CircleMarker, Popup, useMap } from 'react-leaflet';
+import { CAFE_LOCATION, getGoogleMapsDirectionsUrl } from '../config/cafeLocation';
 import 'leaflet/dist/leaflet.css';
 
-const destination = {
-  lat: Number(import.meta.env.VITE_CAFE_LAT) || 16.705,
-  lng: Number(import.meta.env.VITE_CAFE_LNG) || 74.2433,
-};
-const cafeName = import.meta.env.VITE_CAFE_NAME || 'New Friendship Cafe';
+const destination = CAFE_LOCATION;
+const cafeName = destination.name;
 
 function FitRoute({ coordinates }) {
   const map = useMap();
@@ -85,9 +83,7 @@ export default function CafeDirectionsModal({ onClose }) {
   }
 
   const coordinates = route?.coordinates || [[destination.lat, destination.lng]];
-  const googleMapsUrl = 'https://www.google.com/maps/dir/?api=1&destination='
-    + destination.lat + ',' + destination.lng
-    + (start ? '&origin=' + start.lat + ',' + start.lng : '');
+  const googleMapsUrl = getGoogleMapsDirectionsUrl(start);
   const distanceKm = route ? (route.distance / 1000).toFixed(1) : '';
   const durationMinutes = route ? Math.max(1, Math.round(route.duration / 60)) : 0;
 
@@ -102,11 +98,11 @@ export default function CafeDirectionsModal({ onClose }) {
           <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
           <FitRoute coordinates={coordinates} />
           {route && <><Polyline positions={route.coordinates} pathOptions={{ color: '#b65e3c', weight: 6, opacity: 0.86 }} /><CircleMarker center={[start.lat, start.lng]} radius={8} pathOptions={{ color: '#fffdfa', weight: 3, fillColor: '#51384f', fillOpacity: 1 }}><Popup>{t('Your starting point')}</Popup></CircleMarker></>}
-          <CircleMarker center={[destination.lat, destination.lng]} radius={9} pathOptions={{ color: '#fffdfa', weight: 3, fillColor: '#b65e3c', fillOpacity: 1 }}><Popup>{cafeName}</Popup></CircleMarker>
+          <CircleMarker center={[destination.lat, destination.lng]} radius={9} pathOptions={{ color: '#fffdfa', weight: 3, fillColor: '#b65e3c', fillOpacity: 1 }}><Popup><strong>{cafeName}</strong><br />{destination.address}</Popup></CircleMarker>
         </MapContainer>
       </div>
       <div className="directions-details">
-        <p className="directions-destination"><span aria-hidden="true">⌖</span><strong>{cafeName}</strong><small>{t('Kolhapur')} · {destination.lat.toFixed(4)}, {destination.lng.toFixed(4)}</small></p>
+        <p className="directions-destination"><span aria-hidden="true">⌖</span><strong>{cafeName}</strong><small>{destination.address} · {destination.lat.toFixed(6)}, {destination.lng.toFixed(7)}</small></p>
         {route && <p className="route-summary" role="status"><strong>{distanceKm} {t('km')}</strong><span>·</span><strong>{t('about')} {durationMinutes} {t('min')}</strong><small>{t('Driving route')}</small></p>}
         {busy && <p className="directions-status" role="status">{t('Finding your location and road route…')}</p>}
         {error && <p className="directions-error" role="alert">{t(error)}</p>}
